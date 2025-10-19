@@ -54,14 +54,20 @@ Enumerable.make(42).toArray()
 ```
 
 ### `Enumerable.matches`
-Enumerate regular-expression matches.
+Enumerate regular-expression matches as rich `RegExpMatchArray` objects. Each emitted match contains the full match, capture
+groups, and metadata such as the index where the match started. This is handy when you want to perform incremental parsing or
+drive further projections based on the structure of a string.
 
 ```js
-Enumerable.matches('abc123abc', /(\w+?)(\d+)/)
-  .select(m => `${m[0]} @ index ${m.index}`)
+// Walk a Markdown list and extract both the bullet marker and the text that follows it.
+Enumerable.matches('- Learn\n* Build\n- Share', /(?<bullet>[-*])\s+(?<text>.+)/g)
+  .select(match => `${match.groups.bullet === '-' ? 'Task' : 'Idea'}: ${match.groups.text}`)
   .toArray()
-// => ['abc123 @ index 0']
+// => ['Task: Learn', 'Idea: Build', 'Task: Share']
 ```
+
+Unlike `String.prototype.matchAll`, `Enumerable.matches` integrates directly with the rest of the LINQ operators so you can
+filter, group, or transform matches without leaving the fluent chain.
 
 ### `Enumerable.range`
 Generate numbers starting from `start` for `count` steps.
@@ -219,22 +225,82 @@ Enumerable.from([[1, 2], [3]]).flatten().toArray()
 ```
 
 ### `pairwise`
-Apply a selector to consecutive pairs.
+Apply a selector to consecutive pairs. Because each element is paired with its predecessor, `pairwise` shines when you need
+to calculate deltas or highlight transitions in a sequence.
 
 ```js
-Enumerable.range(1, 4).pairwise((prev, current) => current - prev).toArray()
-// => [1, 1, 1]
+// Spot stock price changes day-over-day.
+const closingPrices = [101, 103, 99, 102]
+Enumerable.from(closingPrices)
+  .pairwise((previous, current) => ({ previous, current, delta: current - previous }))
+  .toArray()
+// => [
+//      { previous: 101, current: 103, delta: 2 },
+//      { previous: 103, current: 99, delta: -4 },
+//      { previous: 99, current: 102, delta: 3 }
+//    ]
+```
+
+When you want to compare an element with either its previous or next neighbor but need more control over indexing, you can
+also emulate the same idea with `zip` by pairing the sequence with a shifted copy:
+
+```js
+const readings = [15, 14, 16, 18]
+// Observe neighbors by zipping against shifted copies of the same list.
+const withNext = Enumerable.from(readings)
+  .zip(Enumerable.from(readings).skip(1), (current, next) => ({ current, next }))
+  .toArray()
+// => [
+//      { current: 15, next: 14 },
+//      { current: 14, next: 16 },
+//      { current: 16, next: 18 }
+//    ]
+
+const withPrevious = Enumerable.from(readings)
+  .skip(1)
+  .zip(readings, (current, previous) => ({ previous, current }))
+  .toArray()
+// => [
+//      { previous: 15, current: 14 },
+//      { previous: 14, current: 16 },
+//      { previous: 16, current: 18 }
+//    ]
 ```
 
 ### `scan`
-Emit running accumulations. Works with implicit and explicit seeds.
+Emit running accumulations. Works with implicit and explicit seeds. `scan` is a great fit for situations where you want to
+surface intermediate results such as running totals, moving averages, or the evolving state of a reducer function.
 
 ```js
-Enumerable.range(1, 4).scan((prev, cur) => prev + cur).toArray()
-// => [1, 3, 6, 10]
+// Running total from a stream of cash register transactions.
+const transactions = [5, -2, 13, -4]
+Enumerable.from(transactions)
+  .scan((total, amount) => total + amount)
+  .toArray()
+// => [5, 3, 16, 12]
 
-Enumerable.range(1, 4).scan(0, (total, cur) => total + cur).toArray()
-// => [1, 3, 6, 10]
+// Provide an explicit seed to ensure the balance starts from zero even if the sequence is empty.
+Enumerable.from(transactions)
+  .scan(0, (total, amount) => total + amount)
+  .toArray()
+// => [5, 3, 16, 12]
+```
+
+`scan` also combines nicely with `zip` when you need to compare the running total with the original values:
+
+```js
+// Pair each purchase with the balance that follows it.
+const purchases = [12, 7, 5]
+const balances = Enumerable.from(purchases).scan(0, (total, amount) => total + amount)
+
+balances
+  .zip(purchases, (balance, purchase) => ({ purchase, balanceAfter: balance }))
+  .toArray()
+// => [
+//      { purchase: 12, balanceAfter: 12 },
+//      { purchase: 7, balanceAfter: 19 },
+//      { purchase: 5, balanceAfter: 24 }
+//    ]
 ```
 
 ### `select`
@@ -286,13 +352,32 @@ Enumerable.from([1, 'two', 3]).ofType(Number).toArray()
 ## Combining Sequences
 
 ### `zip`
-Combine values positionally.
+Combine values positionally. The resulting sequence is as long as the shortest input, making `zip` ideal for pairing related
+streams that advance together: coordinates, ids with values, or even separate feeds that you want to inspect side-by-side.
 
 ```js
-Enumerable.range(1, 3)
-  .zip(['A', 'B', 'C'], (num, letter) => `${letter}${num}`)
+// Assemble addresses from separate sequences of house numbers and street names.
+Enumerable.range(100, 3)
+  .zip(['Pine Ave', 'Maple St', 'Elm Rd'], (house, street) => `${house} ${street}`)
   .toArray()
-// => ['A1', 'B2', 'C3']
+// => ['100 Pine Ave', '101 Maple St', '102 Elm Rd']
+```
+
+You can also use `zip` with `skip` and `scan` to build higher-level insights. The next example keeps a running total of
+orders while exposing each individual order amount so the consumer can see both numbers at once:
+
+```js
+const orders = [29.99, 12.5, 48.0]
+const runningTotal = Enumerable.from(orders).scan(0, (total, amount) => total + amount)
+
+runningTotal
+  .zip(orders, (total, order) => `Order: $${order.toFixed(2)}, cumulative: $${total.toFixed(2)}`)
+  .toArray()
+// => [
+//      'Order: $29.99, cumulative: $29.99',
+//      'Order: $12.50, cumulative: $42.49',
+//      'Order: $48.00, cumulative: $90.49'
+//    ]
 ```
 
 ### `merge`
