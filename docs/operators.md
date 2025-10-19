@@ -36,9 +36,14 @@ Enumerable.empty().isEmpty()
 ```
 
 ### `Enumerable.from`
-Convert iterables, array-like values, or plain objects into a LINQ sequence.
+Convert arrays, iterables, array-like values, or plain objects into a LINQ sequence.
 
 ```js
+// Arrays become enumerable immediately
+Enumerable.from(['Ada', 'Grace', 'Lin']).select(name => name.toUpperCase()).toArray()
+// => ['ADA', 'GRACE', 'LIN']
+
+// Objects are exposed as `{ key, value }` pairs
 Enumerable.from({ name: 'linq', version: 4 })
   .select(entry => `${entry.key}: ${entry.value}`)
   .toArray()
@@ -304,11 +309,25 @@ balances
 ```
 
 ### `select`
-Project values.
+Project values. When working with objects you can reshape the data into entirely new structures.
 
 ```js
-Enumerable.range(1, 3).select((value, index) => `${index}:${value}`).toArray()
-// => ['0:1', '1:2', '2:3']
+const invoices = [
+  { id: 'INV-001', customer: 'Ada', lineItems: 3, total: 125.5 },
+  { id: 'INV-002', customer: 'Grace', lineItems: 1, total: 42 },
+]
+
+Enumerable.from(invoices)
+  .select((invoice, index) => ({
+    display: `${index + 1}. ${invoice.customer} (${invoice.id})`,
+    hasMultipleLines: invoice.lineItems > 1,
+    totalWithTax: +(invoice.total * 1.07).toFixed(2),
+  }))
+  .toArray()
+/* => [
+  { display: '1. Ada (INV-001)', hasMultipleLines: true, totalWithTax: 134.29 },
+  { display: '2. Grace (INV-002)', hasMultipleLines: false, totalWithTax: 44.94 }
+] */
 ```
 
 ### `selectMany`
@@ -693,15 +712,38 @@ Enumerable.range(1, 7).buffer(3).toArray()
 
 ### `aggregate`
 
+Use a custom accumulator to reduce the sequence. You can omit the seed to start from the first element or supply one to build
+up richer structures before optionally projecting the final result.
+
 ```js
-Enumerable.range(1, 4).aggregate((acc, cur) => acc + cur)
-// => 10
+// Reduction without an explicit seed: factorial of 5
+Enumerable.range(1, 5).aggregate((product, value) => product * value)
+// => 120
 
-Enumerable.range(1, 4).aggregate(0, (acc, cur) => acc + cur)
-// => 10
+// Grow a richer object with a seed and project the final output
+const orders = [
+  { id: 1, region: 'NA', total: 25 },
+  { id: 2, region: 'EU', total: 32 },
+  { id: 3, region: 'NA', total: 18 },
+]
 
-Enumerable.range(1, 4).aggregate(0, (acc, cur) => acc + cur, total => `Sum: ${total}`)
-// => 'Sum: 10'
+Enumerable.from(orders)
+  .aggregate(
+    { count: 0, totalsByRegion: new Map() },
+    (summary, order) => {
+      summary.count++
+      summary.totalsByRegion.set(
+        order.region,
+        (summary.totalsByRegion.get(order.region) ?? 0) + order.total,
+      )
+      return summary
+    },
+    summary => ({
+      orderCount: summary.count,
+      highestRegion: [...summary.totalsByRegion.entries()].sort((a, b) => b[1] - a[1])[0],
+    }),
+  )
+// => { orderCount: 3, highestRegion: ['NA', 43] }
 ```
 
 ### `average`, `count`, `max`, `min`, `maxBy`, `minBy`, `sum`
