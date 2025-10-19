@@ -96,26 +96,45 @@ Enumerable.repeat('na', 4).concat(Enumerable.make('Batman!')).toArray()
 ```
 
 ### `Enumerable.repeatWithFinalize`
-Run an initializer for each element and call a finalizer when the sequence completes.
+Construct values on demand and guarantee that accompanying teardown logic runs even if the consumer stops early. Reach for
+`repeatWithFinalize` when the generated value needs a matching cleanup step such as disposing a resource, returning a pooled
+object, or logging lifecycle events.
 
 ```js
-let disposals = []
-Enumerable.repeatWithFinalize(
-  () => ({ opened: Date.now() }),
-  item => disposals.push(item.opened)
+const auditTrail = []
+
+const getConnections = Enumerable.repeatWithFinalize(
+  () => {
+    const id = `conn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    auditTrail.push(`open:${id}`)
+    return { id }
+  },
+  connection => auditTrail.push(`close:${connection.id}`)
 )
-  .take(3)
+
+getConnections
+  .take(2)
+  .select(conn => conn.id)
   .toArray()
-// => [{ opened: ... }, ...]; finalizer ran 3 times
+// => ['conn-…', 'conn-…'] and auditTrail alternates between matching open/close entries
 ```
+
+Because the finalizer runs for each yielded value, pooled or borrowed resources are always released.
 
 ### `Enumerable.generate`
-Produce a value by invoking a factory for each item.
+Call a factory on every iteration to produce values that depend on the latest state. Use it for synthetic data, timestamps,
+or any scenario where you want a fresh computation each time rather than a shared reference.
 
 ```js
-Enumerable.generate(() => Math.random(), 3).toArray()
-// => e.g. [0.12, 0.98, 0.43]
+let counter = 0
+
+Enumerable.generate(() => ({ id: ++counter, createdAt: new Date().toISOString() }), 2)
+  .select(ticket => `${ticket.id}@${ticket.createdAt}`)
+  .toArray()
+// => ['1@2024-03-25T…', '2@2024-03-25T…'] (timestamps differ for each element)
 ```
+
+The sequence stops automatically when `count` is supplied; omit it to keep generating values until the consumer stops.
 
 ### `Enumerable.toInfinity`
 An infinite increasing sequence.
@@ -145,14 +164,28 @@ Enumerable.unfold({ value: 1 }, state => ({ value: state.value * 2 }))
 ```
 
 ### `Enumerable.defer`
-Delay sequence creation until iteration begins.
+Delay sequence creation until iteration begins. This is ideal for referencing mutable state or expensive operations that
+should run anew for each consumer.
 
 ```js
-let calls = 0
-const source = Enumerable.defer(() => { calls++; return Enumerable.range(1, 3) })
-source.take(2).toArray() // calls = 1
-source.take(1).toArray() // calls = 2 (new enumerable each time)
+let refreshCount = 0
+let latestConfig = { featureEnabled: false }
+
+const configSnapshots = Enumerable.defer(() => {
+  refreshCount++
+  return Enumerable.from(Object.entries(latestConfig))
+})
+
+latestConfig = { featureEnabled: true, locale: 'en-US' }
+configSnapshots.select(entry => entry.join(',')).toArray()
+// => ['featureEnabled,true', 'locale,en-US']; refreshCount == 1
+
+latestConfig = { featureEnabled: false }
+configSnapshots.select(entry => entry.join(',')).toArray()
+// => ['featureEnabled,false']; refreshCount == 2
 ```
+
+Every iteration gets a fresh enumerable that reflects the newest state.
 
 ## Traversal and Projection
 
@@ -530,23 +563,37 @@ Enumerable.from(['aa', 'bb'])
 ```
 
 ### `partitionBy`
-Break into contiguous groups.
+Split a sequence into contiguous chunks keyed by a selector. Unlike `groupBy`, partition boundaries matter—use it when you
+need to preserve run-length information such as streaks, log sessions, or state transitions.
 
 ```js
-Enumerable.from([1, 1, 2, 3, 3])
-  .partitionBy(x => x)
-  .select(group => ({ key: group.key(), items: group.toArray() }))
-  .toArray()
-// => [{ key: 1, items: [1, 1] }, { key: 2, items: [2] }, { key: 3, items: [3, 3] }]
+const sensorReadings = [
+  { value: 23, status: 'ok' },
+  { value: 24, status: 'ok' },
+  { value: 28, status: 'alert' },
+  { value: 26, status: 'alert' },
+  { value: 25, status: 'ok' }
+]
 
-Enumerable.from(['ab', 'ac'])
-  .partitionBy(
-    word => word[0],
-    word => word.toUpperCase(),
-    (key, items) => ({ key, items: items.toJoinedString('/') })
-  )
+Enumerable.from(sensorReadings)
+  .partitionBy(reading => reading.status)
+  .select(group => ({ status: group.key(), count: group.count() }))
   .toArray()
-// => [{ key: 'a', items: 'AB/AC' }]
+// => [
+//      { status: 'ok', count: 2 },
+//      { status: 'alert', count: 2 },
+//      { status: 'ok', count: 1 }
+//    ]
+```
+
+You can also project items and aggregate within each partition while preserving their original order.
+
+```js
+Enumerable.from('AAABBBCCDA')
+  .partitionBy(char => char)
+  .select(group => `${group.key()}:${group.count()}`)
+  .toJoinedString(',')
+// => 'A:3,B:3,C:2,D:1,A:1'
 ```
 
 ### `buffer`
