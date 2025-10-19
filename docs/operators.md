@@ -1,0 +1,857 @@
+# LINQ.js Operator Tutorial
+
+This tutorial demonstrates every operator exposed by `linq.js`. Each section groups related methods and shows short runnable
+examples. All snippets assume the ES module import:
+
+```js
+import Enumerable from '../linq.js'
+```
+
+Feel free to run the snippets in `node` (remember to enable ES modules) or paste them in a REPL.
+
+## Sequence Creation Helpers
+
+### `Enumerable.choice`
+Pick a random element from the supplied arguments each time the sequence advances.
+
+```js
+Enumerable.choice('heads', 'tails').take(5).toArray()
+// => e.g. ['tails', 'tails', 'heads', 'tails', 'heads']
+```
+
+### `Enumerable.cycle`
+Loop through the supplied arguments forever.
+
+```js
+Enumerable.cycle('A', 'B', 'C').take(7).toArray()
+// => ['A', 'B', 'C', 'A', 'B', 'C', 'A']
+```
+
+### `Enumerable.empty`
+Create an empty sequence.
+
+```js
+Enumerable.empty().isEmpty()
+// => true
+```
+
+### `Enumerable.from`
+Convert iterables, array-like values, or plain objects into a LINQ sequence.
+
+```js
+Enumerable.from({ name: 'linq', version: 4 })
+  .select(entry => `${entry.key}: ${entry.value}`)
+  .toArray()
+// => ['name: linq', 'version: 4']
+```
+
+### `Enumerable.make`
+Create a single-element sequence.
+
+```js
+Enumerable.make(42).toArray()
+// => [42]
+```
+
+### `Enumerable.matches`
+Enumerate regular-expression matches.
+
+```js
+Enumerable.matches('abc123abc', /(\w+?)(\d+)/)
+  .select(m => `${m[0]} @ index ${m.index}`)
+  .toArray()
+// => ['abc123 @ index 0']
+```
+
+### `Enumerable.range`
+Generate numbers starting from `start` for `count` steps.
+
+```js
+Enumerable.range(1, 5).toArray()
+// => [1, 2, 3, 4, 5]
+```
+
+### `Enumerable.rangeDown`
+Count down from `start` for `count` steps.
+
+```js
+Enumerable.rangeDown(5, 5).toArray()
+// => [5, 4, 3, 2, 1]
+```
+
+### `Enumerable.rangeTo`
+Walk from `start` toward `to` (inclusive) using an optional step.
+
+```js
+Enumerable.rangeTo(2, 10, 3).toArray()
+// => [2, 5, 8]
+```
+
+### `Enumerable.repeat`
+Repeat a value a specific number of times (or indefinitely when `count` is omitted).
+
+```js
+Enumerable.repeat('na', 4).concat(Enumerable.make('Batman!')).toArray()
+// => ['na', 'na', 'na', 'na', 'Batman!']
+```
+
+### `Enumerable.repeatWithFinalize`
+Run an initializer for each element and call a finalizer when the sequence completes.
+
+```js
+let disposals = []
+Enumerable.repeatWithFinalize(
+  () => ({ opened: Date.now() }),
+  item => disposals.push(item.opened)
+)
+  .take(3)
+  .toArray()
+// => [{ opened: ... }, ...]; finalizer ran 3 times
+```
+
+### `Enumerable.generate`
+Produce a value by invoking a factory for each item.
+
+```js
+Enumerable.generate(() => Math.random(), 3).toArray()
+// => e.g. [0.12, 0.98, 0.43]
+```
+
+### `Enumerable.toInfinity`
+An infinite increasing sequence.
+
+```js
+Enumerable.toInfinity(10, 5).take(4).toArray()
+// => [10, 15, 20, 25]
+```
+
+### `Enumerable.toNegativeInfinity`
+An infinite decreasing sequence.
+
+```js
+Enumerable.toNegativeInfinity(-5, 2).take(4).toArray()
+// => [-5, -7, -9, -11]
+```
+
+### `Enumerable.unfold`
+Generate elements by repeatedly applying a function to the prior value.
+
+```js
+Enumerable.unfold({ value: 1 }, state => ({ value: state.value * 2 }))
+  .select(x => x.value)
+  .take(4)
+  .toArray()
+// => [1, 2, 4, 8]
+```
+
+### `Enumerable.defer`
+Delay sequence creation until iteration begins.
+
+```js
+let calls = 0
+const source = Enumerable.defer(() => { calls++; return Enumerable.range(1, 3) })
+source.take(2).toArray() // calls = 1
+source.take(1).toArray() // calls = 2 (new enumerable each time)
+```
+
+## Traversal and Projection
+
+### `traverseBreadthFirst`
+Walk a tree layer by layer.
+
+```js
+const tree = { value: 'root', children: [{ value: 'a', children: [] }, { value: 'b', children: [] }] }
+Enumerable.from([tree])
+  .traverseBreadthFirst(node => Enumerable.from(node.children), (node, depth) => `${' '.repeat(depth)}${node.value}`)
+  .toArray()
+// => ['root', ' a', ' b']
+```
+
+### `traverseDepthFirst`
+Depth-first traversal with optional projection.
+
+```js
+Enumerable.from([tree])
+  .traverseDepthFirst(node => Enumerable.from(node.children), (node, depth) => `${depth}:${node.value}`)
+  .toArray()
+// => ['0:root', '1:a', '1:b']
+```
+
+### `flatten`
+Remove one level of nesting.
+
+```js
+Enumerable.from([[1, 2], [3]]).flatten().toArray()
+// => [1, 2, 3]
+```
+
+### `pairwise`
+Apply a selector to consecutive pairs.
+
+```js
+Enumerable.range(1, 4).pairwise((prev, current) => current - prev).toArray()
+// => [1, 1, 1]
+```
+
+### `scan`
+Emit running accumulations. Works with implicit and explicit seeds.
+
+```js
+Enumerable.range(1, 4).scan((prev, cur) => prev + cur).toArray()
+// => [1, 3, 6, 10]
+
+Enumerable.range(1, 4).scan(0, (total, cur) => total + cur).toArray()
+// => [1, 3, 6, 10]
+```
+
+### `select`
+Project values.
+
+```js
+Enumerable.range(1, 3).select((value, index) => `${index}:${value}`).toArray()
+// => ['0:1', '1:2', '2:3']
+```
+
+### `selectMany`
+Flatten inner sequences. Works with arrays, iterables, and array-like objects.
+
+```js
+const letters = ['ab', 'cd']
+Enumerable.from(letters).selectMany(word => word.split('')).toArray()
+// => ['a', 'b', 'c', 'd']
+
+Enumerable.from([{ id: 1, tags: ['x', 'y'] }])
+  .selectMany(item => item.tags, (item, tag) => `${item.id}:${tag}`)
+  .toArray()
+// => ['1:x', '1:y']
+```
+
+### `where`
+Filter elements.
+
+```js
+Enumerable.range(1, 6).where(x => x % 2 === 0).toArray()
+// => [2, 4, 6]
+```
+
+### `choose`
+Return only projected values that are neither `null` nor `undefined`.
+
+```js
+Enumerable.from([1, null, 3]).choose(x => (x ? x * 2 : null)).toArray()
+// => [2, 6]
+```
+
+### `ofType`
+Filter by runtime type.
+
+```js
+Enumerable.from([1, 'two', 3]).ofType(Number).toArray()
+// => [1, 3]
+```
+
+## Combining Sequences
+
+### `zip`
+Combine values positionally.
+
+```js
+Enumerable.range(1, 3)
+  .zip(['A', 'B', 'C'], (num, letter) => `${letter}${num}`)
+  .toArray()
+// => ['A1', 'B2', 'C3']
+```
+
+### `merge`
+Interleave multiple sequences.
+
+```js
+Enumerable.range(1, 3).merge(['a', 'b', 'c']).toArray()
+// => [1, 'a', 2, 'b', 3, 'c']
+```
+
+### `join`
+Inner join sequences.
+
+```js
+const people = [
+  { id: 1, name: 'Ada', cityId: 1 },
+  { id: 2, name: 'Alan', cityId: 2 },
+]
+const cities = [
+  { id: 1, name: 'London' },
+  { id: 2, name: 'Manchester' },
+]
+
+Enumerable.from(people)
+  .join(
+    cities,
+    p => p.cityId,
+    c => c.id,
+    (p, c) => `${p.name} - ${c.name}`
+  )
+  .toArray()
+// => ['Ada - London', 'Alan - Manchester']
+```
+
+### `leftJoin`
+Include left-side rows even when there is no match.
+
+```js
+Enumerable.from(people)
+  .leftJoin(
+    [{ id: 1, name: 'London' }],
+    p => p.cityId,
+    c => c.id,
+    (p, c) => `${p.name} - ${(c && c.name) || 'Unknown'}`
+  )
+  .toArray()
+// => ['Ada - London', 'Alan - Unknown']
+```
+
+### `groupJoin`
+Group inner matches per element.
+
+```js
+Enumerable.from(cities)
+  .groupJoin(
+    people,
+    c => c.id,
+    p => p.cityId,
+    (c, residents) => ({ city: c.name, residents: residents.select(r => r.name).toArray() })
+  )
+  .toArray()
+// => [{ city: 'London', residents: ['Ada'] }, { city: 'Manchester', residents: ['Alan'] }]
+```
+
+## Quantifiers and Set Logic
+
+### `all`
+Check whether every element matches a predicate.
+
+```js
+Enumerable.range(1, 5).all(x => x < 10)
+// => true
+```
+
+### `any`
+Detect if the sequence has any (or matching) items.
+
+```js
+Enumerable.empty().any()
+// => false
+Enumerable.range(1, 5).any(x => x > 3)
+// => true
+```
+
+### `isEmpty`
+Explicit emptiness test.
+
+```js
+Enumerable.range(1, 3).skip(3).isEmpty()
+// => true
+```
+
+### `concat`
+Append additional sequences.
+
+```js
+Enumerable.range(1, 2).concat([3, 4]).toArray()
+// => [1, 2, 3, 4]
+```
+
+### `insert`
+Insert another sequence at a specific index.
+
+```js
+Enumerable.range(1, 4).insert(2, Enumerable.range(100, 2)).toArray()
+// => [1, 2, 100, 101, 3, 4]
+```
+
+### `alternate`
+Alternate between elements or sequences.
+
+```js
+Enumerable.range(1, 3).alternate(0).toArray()
+// => [1, 0, 2, 0, 3]
+
+Enumerable.range(1, 3).alternate(['A', 'B']).toArray()
+// => [1, 'A', 'B', 2, 'A', 'B', 3]
+```
+
+### `contains`
+Test for existence optionally using a compare selector.
+
+```js
+Enumerable.from(['Ada', 'Alan']).contains('ada', name => name.toLowerCase())
+// => true
+```
+
+### `defaultIfEmpty`
+Provide a fallback when the sequence is empty.
+
+```js
+Enumerable.empty().defaultIfEmpty('none').toArray()
+// => ['none']
+```
+
+### `distinct` and `distinctUntilChanged`
+Remove duplicates globally or consecutive duplicates.
+
+```js
+Enumerable.from([1, 2, 2, 3]).distinct().toArray()
+// => [1, 2, 3]
+
+Enumerable.from([1, 1, 2, 1]).distinctUntilChanged().toArray()
+// => [1, 2, 1]
+
+Enumerable.from(['Ada', 'alan']).distinct(name => name.toLowerCase()).toArray()
+// => ['Ada']
+```
+
+### `except`, `intersect`, `union`
+Set-based operations with optional custom selectors.
+
+```js
+const primary = Enumerable.from([1, 2, 3, 4])
+const secondary = [3, 4, 5]
+primary.except(secondary).toArray() // => [1, 2]
+primary.intersect(secondary).toArray() // => [3, 4]
+primary.union(secondary).toArray() // => [1, 2, 3, 4, 5]
+
+Enumerable.from(['Ada']).union(['alan'], name => name.toLowerCase()).toArray()
+// => ['Ada']
+```
+
+### `sequenceEqual`
+Check if two sequences have identical order and values.
+
+```js
+Enumerable.range(1, 3).sequenceEqual([1, 2, 3])
+// => true
+
+Enumerable.from(['Ada']).sequenceEqual(['ada'], name => name.toLowerCase())
+// => true
+```
+
+## Ordering
+
+### `orderBy`, `orderByDescending`
+Sort sequences.
+
+```js
+const languages = [
+  { name: 'Ada', year: 1980 },
+  { name: 'C', year: 1972 },
+  { name: 'Python', year: 1991 },
+]
+
+const ordered = Enumerable.from(languages).orderBy(lang => lang.year)
+ordered.select(lang => lang.name).toArray()
+// => ['C', 'Ada', 'Python']
+
+Enumerable.from(languages)
+  .orderByDescending(lang => lang.name)
+  .select(lang => lang.name)
+  .toArray()
+// => ['Python', 'C', 'Ada']
+```
+
+### `IOrderedEnumerable.thenBy` / `thenByDescending`
+Tie-break sorting.
+
+```js
+Enumerable.from([
+  { name: 'Ada', group: 2 },
+  { name: 'Alan', group: 1 },
+  { name: 'Alonzo', group: 1 },
+])
+  .orderBy(person => person.group)
+  .thenBy(person => person.name)
+  .select(p => `${p.group}-${p.name}`)
+  .toArray()
+// => ['1-Alan', '1-Alonzo', '2-Ada']
+
+Enumerable.from([
+  { name: 'Grace', group: 1 },
+  { name: 'Guido', group: 1 },
+])
+  .orderBy(person => person.group)
+  .thenByDescending(person => person.name)
+  .select(p => p.name)
+  .toArray()
+// => ['Guido', 'Grace']
+```
+
+### `IOrderedEnumerable.createOrderedEnumerable`
+Build a custom ordering directly.
+
+```js
+const custom = Enumerable.from(['b', 'a', 'c'])
+  .orderBy(x => x)
+  .createOrderedEnumerable(x => x.charCodeAt(0), undefined, true)
+custom.toArray()
+// => ['c', 'b', 'a'] (descending by char code)
+```
+
+### `reverse`, `shuffle`, `weightedSample`
+
+```js
+Enumerable.range(1, 3).reverse().toArray() // => [3, 2, 1]
+Enumerable.range(1, 5).shuffle().count() // => 5 (random order)
+Enumerable.from([{ n: 'A', w: 1 }, { n: 'B', w: 5 }])
+  .weightedSample(x => x.w)
+  .take(3)
+  .select(x => x.n)
+  .toArray()
+// => Biased toward 'B'
+```
+
+## Grouping
+
+### `groupBy`
+
+```js
+Enumerable.from(['ant', 'bear', 'cat'])
+  .groupBy(word => word.length, word => word.toUpperCase())
+  .select(group => ({ length: group.key(), words: group.toArray() }))
+  .toArray()
+// => [{ length: 3, words: ['ANT', 'CAT'] }, { length: 4, words: ['BEAR'] }]
+
+Enumerable.from(['aa', 'bb'])
+  .groupBy(
+    word => word,
+    word => word,
+    (key, group) => ({ key, group: group.toArray() }),
+    key => key.length
+  )
+  .toArray()
+// => groups deduplicated by key length
+```
+
+### `partitionBy`
+Break into contiguous groups.
+
+```js
+Enumerable.from([1, 1, 2, 3, 3])
+  .partitionBy(x => x)
+  .select(group => ({ key: group.key(), items: group.toArray() }))
+  .toArray()
+// => [{ key: 1, items: [1, 1] }, { key: 2, items: [2] }, { key: 3, items: [3, 3] }]
+
+Enumerable.from(['ab', 'ac'])
+  .partitionBy(
+    word => word[0],
+    word => word.toUpperCase(),
+    (key, items) => ({ key, items: items.toJoinedString('/') })
+  )
+  .toArray()
+// => [{ key: 'a', items: 'AB/AC' }]
+```
+
+### `buffer`
+Collect items into fixed-size chunks.
+
+```js
+Enumerable.range(1, 7).buffer(3).toArray()
+// => [[1, 2, 3], [4, 5, 6], [7]]
+```
+
+## Aggregation
+
+### `aggregate`
+
+```js
+Enumerable.range(1, 4).aggregate((acc, cur) => acc + cur)
+// => 10
+
+Enumerable.range(1, 4).aggregate(0, (acc, cur) => acc + cur)
+// => 10
+
+Enumerable.range(1, 4).aggregate(0, (acc, cur) => acc + cur, total => `Sum: ${total}`)
+// => 'Sum: 10'
+```
+
+### `average`, `count`, `max`, `min`, `maxBy`, `minBy`, `sum`
+
+```js
+const values = Enumerable.from([1, 2, 3, 4])
+values.average() // => 2.5
+values.count() // => 4
+values.max() // => 4
+values.min() // => 1
+values.sum() // => 10
+
+const peopleAges = Enumerable.from([
+  { name: 'Ada', age: 36 },
+  { name: 'Grace', age: 40 },
+])
+peopleAges.maxBy(p => p.age) // => { name: 'Grace', age: 40 }
+peopleAges.minBy(p => p.age) // => { name: 'Ada', age: 36 }
+```
+
+## Element Access
+
+### `elementAt`, `elementAtOrDefault`
+
+```js
+const seq = Enumerable.range(1, 3)
+seq.elementAt(1) // => 2
+seq.elementAtOrDefault(10, 99) // => 99
+```
+
+### `first`, `firstOrDefault`
+
+```js
+Enumerable.range(1, 5).first(x => x > 3) // => 4
+Enumerable.empty().firstOrDefault(0) // => 0
+```
+
+### `last`, `lastOrDefault`
+
+```js
+Enumerable.range(1, 5).last() // => 5
+Enumerable.range(1, 5).lastOrDefault(x => x > 10, -1) // => -1
+```
+
+### `single`, `singleOrDefault`
+
+```js
+Enumerable.range(1, 5).where(x => x === 3).single() // => 3
+Enumerable.empty().singleOrDefault('none') // => 'none'
+```
+
+## Partitioning
+
+### `skip`, `skipWhile`
+
+```js
+Enumerable.range(1, 5).skip(2).toArray() // => [3, 4, 5]
+Enumerable.range(1, 5).skipWhile(x => x < 3).toArray() // => [3, 4, 5]
+```
+
+### `take`, `takeWhile`
+
+```js
+Enumerable.range(1, 5).take(2).toArray() // => [1, 2]
+Enumerable.range(1, 5).takeWhile(x => x < 4).toArray() // => [1, 2, 3]
+```
+
+### `takeExceptLast`, `takeFromLast`
+
+```js
+Enumerable.range(1, 5).takeExceptLast().toArray() // => [1, 2, 3, 4]
+Enumerable.range(1, 5).takeExceptLast(2).toArray() // => [1, 2, 3]
+Enumerable.range(1, 5).takeFromLast(2).toArray() // => [4, 5]
+```
+
+### `indexOf`, `lastIndexOf`
+
+```js
+Enumerable.from(['a', 'b', 'a']).indexOf('a') // => 0
+Enumerable.from(['a', 'b', 'a']).lastIndexOf('a') // => 2
+Enumerable.from([1, 2, 3]).indexOf(x => x === 2) // => 1
+```
+
+## Conversion
+
+### `asEnumerable`, `cast`
+
+```js
+const array = [1, 2, 3]
+const seqAgain = Enumerable.from(array).asEnumerable()
+seqAgain.cast(Number).sum() // => 6
+```
+
+### `toArray`, `toLookup`, `toObject`
+
+```js
+Enumerable.range(1, 3).toArray() // => [1, 2, 3]
+
+const lookup = Enumerable.from(['ant', 'ape']).toLookup(word => word[0])
+lookup.get('a').toArray() // => ['ant', 'ape']
+
+Enumerable.from(['Ada', 'Alan']).toLookup(
+  person => person[0],
+  person => person.toUpperCase(),
+  key => key.toLowerCase()
+)
+// => lookup with uppercase values and case-insensitive keys
+
+Enumerable.from(['Ada', 'Alan']).toObject(name => name[0], name => name)
+// => { A: 'Alan' } (last wins)
+```
+
+### `toDictionary`
+
+```js
+const dict = Enumerable.from([
+  { key: 'a', value: 1 },
+  { key: 'b', value: 2 },
+]).toDictionary(item => item.key, item => item.value)
+
+dict.get('a') // => 1
+
+const insensitive = Enumerable.from(['Ada', 'alan']).toDictionary(
+  name => name,
+  name => name.length,
+  key => key.toLowerCase()
+)
+insensitive.get('ALAN') // => 4
+```
+
+### `toJSONString`
+
+```js
+Enumerable.range(1, 3).toJSONString()
+// => '[1,2,3]'
+
+Enumerable.range(1, 3).toJSONString(null, 2)
+// => "[\n  1,\n  2,\n  3\n]"
+
+Enumerable.from([{ n: 1 }, { n: 2 }]).toJSONString(['n'])
+// => '[{"n":1},{"n":2}]'
+```
+
+### `toJoinedString`
+
+```js
+Enumerable.range(1, 3).toJoinedString(', ')
+// => '1, 2, 3'
+Enumerable.range(1, 3).toJoinedString(' - ', (value, index) => `${index}:${value}`)
+// => '0:1 - 1:2 - 2:3'
+```
+
+### `doAction`, `forEach`, `force`
+
+```js
+let seen = []
+const lazy = Enumerable.range(1, 3).doAction(x => seen.push(x))
+lazy.first() // doAction runs lazily
+seen // => [1]
+
+Enumerable.range(1, 3).forEach((value, index) => {
+  if (index === 1) return false // stop early
+})
+
+lazy.force() // iterate and cache
+```
+
+### `letBind`
+Re-use the same evaluated sequence inside a function.
+
+```js
+Enumerable.range(1, 4)
+  .letBind(seq => seq.select(x => x * 2))
+  .toArray()
+// => [2, 4, 6, 8]
+
+Enumerable.range(1, 3)
+  .letBind(seq => seq.toArray())
+  .toArray()
+// => [1, 2, 3] (array result treated as sequence)
+```
+
+### `share` and `memoize`
+Share a single enumeration or cache results.
+
+```js
+const shared = Enumerable.generate(() => Math.random(), 3).share()
+shared.toArray() // => e.g. [0.3, 0.7, 0.9]
+shared.dispose() // free resources
+
+const memoized = Enumerable.generate(() => Math.random(), 3).memoize()
+memoized.toArray() === memoized.toArray() // => true (cached)
+memoized.dispose()
+```
+
+### `catchError`, `finallyAction`
+
+```js
+let finallyCalled = false
+Enumerable.from([1, 0, 2])
+  .select(x => 10 / x)
+  .catchError(err => console.log('Handled', err.message))
+  .finallyAction(() => { finallyCalled = true })
+  .toArray()
+// => logs error, sets finallyCalled = true
+
+Enumerable.from([1])
+  .select(x => { throw new Error('boom') })
+  .catchError('Error logged to console via string handler')
+  .toArray()
+```
+
+### `log` and `trace`
+Emit diagnostics while keeping the sequence lazy.
+
+```js
+Enumerable.range(1, 3).log().toArray()
+// => logs each value
+Enumerable.range(1, 3).log(x => x * 2).toArray()
+// => logs doubled values
+Enumerable.range(1, 3).trace('value', x => x * 10).toArray()
+// => logs 'value: 10', 'value: 20', ...
+```
+
+## Specialized Interfaces
+
+### `IDisposableEnumerable`
+The result of `share()` or `memoize()` exposes `dispose()`.
+
+```js
+const resource = Enumerable.generate(() => Date.now(), 2).share()
+resource.dispose()
+```
+
+### `IDictionary`
+
+```js
+const dictionary = Enumerable.empty().toDictionary()
+dictionary.add('a', 1)
+dictionary.set('b', 2)
+dictionary.contains('a') // => true
+dictionary.count() // => 2
+dictionary.toEnumerable().select(kvp => `${kvp.key}:${kvp.value}`).toArray()
+// => ['a:1', 'b:2']
+dictionary.remove('a')
+dictionary.clear()
+```
+
+### `ILookup` & `IGrouping`
+
+```js
+const lettersLookup = Enumerable.from(['apple', 'avocado', 'banana']).toLookup(word => word[0])
+lettersLookup.count() // => 2
+lettersLookup.contains('b') // => true
+lettersLookup
+  .toEnumerable()
+  .select(group => ({ key: group.key(), source: group.getSource() }))
+  .toArray()
+// => [{ key: 'a', source: ['apple', 'avocado'] }, { key: 'b', source: ['banana'] }]
+```
+
+### `Utils`
+The `Enumerable.Utils` helpers are available for advanced scenarios:
+
+```js
+const lambda = Enumerable.Utils.createLambda('x => x * 2')
+lambda(10) // => 20
+Enumerable.Utils.hasNativeIteratorSupport() // => true in modern environments
+
+const customEnumerable = Enumerable.Utils.createEnumerable(() => {
+  let current = 0
+  return Enumerable.Utils.createEnumerator(
+    () => { current = 0 },
+    function() { return current < 3 ? this.yieldReturn(++current) : this.yieldBreak() },
+    () => {}
+  )
+})
+customEnumerable.toArray() // => [1, 2, 3]
+
+Enumerable.Utils.extendTo(Array)
+// ... arrays now have LINQ methods; undo with:
+Enumerable.Utils.recallFrom(Array)
+```
+
+This guide now covers every operator provided by `linq.js`. Mix and match them to express complex data transformations succinctly.
