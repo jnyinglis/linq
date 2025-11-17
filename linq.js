@@ -1784,6 +1784,56 @@ Enumerable.prototype.partitionBy = function (keySelector, elementSelector, resul
     });
 };
 
+Enumerable.prototype.windowBy = function (partitionKeySelector, orderKeySelector, frame, selector) {
+    var source = this;
+    partitionKeySelector = Utils.createLambda(partitionKeySelector);
+    orderKeySelector = Utils.createLambda(orderKeySelector);
+    selector = (selector == null) ? Functions.Identity : Utils.createLambda(selector);
+    frame = frame || {};
+
+    var preceding = (frame.preceding == null) ? 0 : frame.preceding;
+    var following = (frame.following == null) ? 0 : frame.following;
+    var requireFullWindow = (frame.requireFullWindow == null) ? true : frame.requireFullWindow;
+
+    return Enumerable.defer(function () {
+        var groups = source
+            .groupBy(partitionKeySelector, Functions.Identity)
+            .toArray();
+
+        var results = [];
+
+        for (var g = 0; g < groups.length; g++) {
+            var group = groups[g];
+            var key = group.key();
+            var partition = group
+                .orderBy(orderKeySelector)
+                .toArray();
+
+            var n = partition.length;
+            var fullWindowSize = preceding + following + 1;
+
+            for (var i = 0; i < n; i++) {
+                var start = Math.max(0, i - preceding);
+                var end = Math.min(n - 1, i + following);
+                var window = partition.slice(start, end + 1);
+                var effectiveWindow = (requireFullWindow && window.length < fullWindowSize)
+                    ? []
+                    : window;
+
+                results.push(selector({
+                    partitionKey: key,
+                    row: partition[i],
+                    index: i,
+                    partition: partition,
+                    window: effectiveWindow
+                }));
+            }
+        }
+
+        return Enumerable.from(results);
+    });
+};
+
 Enumerable.prototype.buffer = function (count) {
     var source = this;
 

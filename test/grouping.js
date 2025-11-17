@@ -104,6 +104,70 @@ test("partitionBy", function ()
     deepEqual(actual, expected);
 });
 
+test("windowBy", function ()
+{
+    var rows = [
+        { id: 3, value: 30 },
+        { id: 1, value: 10 },
+        { id: 2, value: 20 }
+    ];
+
+    var actual = Enumerable.from(rows)
+        .windowBy(
+            function () { return "all"; },
+            function (row) { return row.id; },
+            { preceding: 1, following: 0, requireFullWindow: false },
+            function (ctx) {
+                return {
+                    id: ctx.row.id,
+                    windowValues: Enumerable.from(ctx.window).select(function (x) { return x.value; }).toArray()
+                };
+            })
+        .orderBy(function (entry) { return entry.id; })
+        .toArray();
+
+    var expected = [
+        { id: 1, windowValues: [10] },
+        { id: 2, windowValues: [10, 20] },
+        { id: 3, windowValues: [20, 30] }
+    ];
+    deepEqual(actual, expected);
+
+    var sales = [
+        { region: "NA", month: 1, total: 10 },
+        { region: "NA", month: 2, total: 20 },
+        { region: "NA", month: 3, total: 30 },
+        { region: "EU", month: 1, total: 5 },
+        { region: "EU", month: 2, total: 15 },
+        { region: "EU", month: 3, total: 25 }
+    ];
+
+    var rolling = Enumerable.from(sales)
+        .windowBy(
+            function (row) { return row.region; },
+            function (row) { return row.month; },
+            { preceding: 2, following: 0, requireFullWindow: true },
+            function (ctx) {
+                return {
+                    region: ctx.partitionKey,
+                    month: ctx.row.month,
+                    sum: Enumerable.from(ctx.window).sum(function (x) { return x.total; })
+                };
+            })
+        .orderBy(function (entry) { return entry.region + "-" + entry.month; })
+        .toArray();
+
+    var expectedRolling = [
+        { region: "EU", month: 1, sum: 0 },
+        { region: "EU", month: 2, sum: 0 },
+        { region: "EU", month: 3, sum: 45 },
+        { region: "NA", month: 1, sum: 0 },
+        { region: "NA", month: 2, sum: 0 },
+        { region: "NA", month: 3, sum: 60 }
+    ];
+    deepEqual(rolling, expectedRolling);
+});
+
 test("buffer", function ()
 {
     let actual = Enumerable.range(1, 10).buffer("3").toArray();

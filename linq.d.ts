@@ -37,6 +37,20 @@ declare namespace Enumerable {
   export function unfold<T>(seed: T, func: (value: T) => T): IEnumerable<T>;
   export function defer<T>(enumerableFactory: () => IEnumerable<T>): IEnumerable<T>;
 
+  export interface WindowFrame {
+    preceding: number;
+    following: number;
+    requireFullWindow?: boolean;
+  }
+
+  export interface WindowContext<T, TKey = unknown> {
+    partitionKey: TKey;
+    row: T;
+    index: number;
+    partition: T[];
+    window: T[];
+  }
+
   export interface IEnumerable<T> {
     (getEnumerator: () => IEnumerator<T>): void;
     getEnumerator(): IEnumerator<T>;
@@ -131,6 +145,7 @@ declare namespace Enumerable {
     partitionBy<TKey, TElement>(keySelector: (element: T) => TKey, elementSelector: (element: T) => TElement): IEnumerable<IGrouping<TKey, TElement>>;
     partitionBy<TKey, TElement, TResult>(keySelector: (element: T) => TKey, elementSelector: (element: T) => TElement, resultSelector: (key: TKey, element: IEnumerable<TElement>) => TResult): IEnumerable<TResult>;
     partitionBy<TKey, TElement, TResult, TCompare>(keySelector: (element: T) => TKey, elementSelector: (element: T) => TElement, resultSelector: (key: TKey, element: IEnumerable<TElement>) => TResult, compareSelector: (element: TKey) => TCompare): IEnumerable<TResult>;
+    windowBy<TKey, TOrder, TResult>(partitionKeySelector: (element: T) => TKey, orderKeySelector: (element: T) => TOrder, frame: WindowFrame, selector: (context: WindowContext<T, TKey>) => TResult): IEnumerable<TResult>;
     buffer(count: number): IEnumerable<T[]>;
     aggregate(func: (prev: T, current: T) => T): T;
     aggregate<TAccumulate>(seed: TAccumulate, func: (prev: TAccumulate, current: T) => TAccumulate): TAccumulate;
