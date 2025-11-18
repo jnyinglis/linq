@@ -700,6 +700,58 @@ Enumerable.from('AAABBBCCDA')
 // => 'A:3,B:3,C:2,D:1,A:1'
 ```
 
+### `windowBy`
+Apply SQL-style window analytics by partitioning rows, ordering within each partition, and exposing a sliding “frame” around every row. The frame is controlled by `preceding`, `following`, and `requireFullWindow`, so you can opt into partial windows or wait until the full frame is available.
+
+```js
+const sales = [
+  { region: 'NA', month: 1, sales: 10 },
+  { region: 'NA', month: 2, sales: 15 },
+  { region: 'NA', month: 3, sales: 20 },
+  { region: 'EU', month: 1, sales: 8 },
+  { region: 'EU', month: 2, sales: 12 },
+  { region: 'EU', month: 3, sales: 18 },
+]
+
+Enumerable.from(sales)
+  .windowBy(
+    row => row.region,        // partition by region
+    row => row.month,         // order chronologically
+    { preceding: 2, following: 0, requireFullWindow: false },
+    ({ row, window }) => ({
+      region: row.region,
+      month: row.month,
+      rolling3: Enumerable.from(window).sum(x => x.sales),
+    })
+  )
+  .toArray()
+// => each row carries a rolling 3-month sum scoped to its region
+```
+
+Ranking within a partition is just as direct—order the partition the way you want and use the supplied `index`:
+
+```js
+const products = [
+  { name: 'Laptop', region: 'NA', totalSalesAmount: 120 },
+  { name: 'Headphones', region: 'NA', totalSalesAmount: 80 },
+  { name: 'Camera', region: 'EU', totalSalesAmount: 90 },
+]
+
+Enumerable.from(products)
+  .windowBy(
+    product => product.region,
+    product => -product.totalSalesAmount, // negative flips the sort for descending order
+    { preceding: Number.MAX_SAFE_INTEGER, following: 0, requireFullWindow: false },
+    ({ row, index }) => ({
+      product: row.name,
+      region: row.region,
+      rankInRegion: index + 1,
+    })
+  )
+  .toArray()
+// => ranks products by sales within each region
+```
+
 ### `buffer`
 Collect items into fixed-size chunks.
 

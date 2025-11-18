@@ -1886,27 +1886,14 @@ Enumerable.prototype.partitionBy = function (keySelector, elementSelector, resul
 
 Enumerable.prototype.windowBy = function (partitionKeySelector, orderKeySelector, frame, selector) {
     var source = this;
-    if (frame == null) {
-        throw new Error('windowBy: frame is required');
-    }
-
     partitionKeySelector = Utils.createLambda(partitionKeySelector);
     orderKeySelector = Utils.createLambda(orderKeySelector);
-    selector = Utils.createLambda(selector);
+    selector = (selector == null) ? Functions.Identity : Utils.createLambda(selector);
+    frame = frame || {};
 
-    var preceding = frame.preceding;
-    var following = frame.following;
-    var requireFullWindow = frame.requireFullWindow;
-
-    if (preceding == null) preceding = 0;
-    if (following == null) following = 0;
-    if (requireFullWindow == null) requireFullWindow = true;
-
-    if (preceding < 0 || following < 0) {
-        throw new Error('windowBy: preceding/following must be >= 0');
-    }
-
-    var fullWindowSize = preceding + following + 1;
+    var preceding = (frame.preceding == null) ? 0 : frame.preceding;
+    var following = (frame.following == null) ? 0 : frame.following;
+    var requireFullWindow = (frame.requireFullWindow == null) ? true : frame.requireFullWindow;
 
     return Enumerable.defer(function () {
         var groups = source
@@ -1922,20 +1909,23 @@ Enumerable.prototype.windowBy = function (partitionKeySelector, orderKeySelector
                 .orderBy(orderKeySelector)
                 .toArray();
 
-            for (var i = 0; i < partition.length; i++) {
+            var n = partition.length;
+            var fullWindowSize = preceding + following + 1;
+
+            for (var i = 0; i < n; i++) {
                 var start = Math.max(0, i - preceding);
-                var end = Math.min(partition.length - 1, i + following);
-                var rawWindow = partition.slice(start, end + 1);
-                var window = (requireFullWindow && rawWindow.length < fullWindowSize)
+                var end = Math.min(n - 1, i + following);
+                var window = partition.slice(start, end + 1);
+                var effectiveWindow = (requireFullWindow && window.length < fullWindowSize)
                     ? []
-                    : rawWindow;
+                    : window;
 
                 results.push(selector({
                     partitionKey: key,
                     row: partition[i],
                     index: i,
                     partition: partition,
-                    window: window
+                    window: effectiveWindow
                 }));
             }
         }
