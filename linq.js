@@ -749,6 +749,106 @@ Enumerable.prototype.pairwise = function (selector) {
     });
 };
 
+// Overload:function(size)
+// Overload:function(size, selector<window, index>)
+// Overload:function(size, step)
+// Overload:function(size, step, selector<window, index>)
+Enumerable.prototype.windowed = function (size, stepOrSelector, selector) {
+    if (size == null) {
+        throw new Error('windowed: size must be >= 1');
+    }
+
+    var source = this;
+    var step = 1;
+
+    if (typeof stepOrSelector === Types.Number) {
+        step = stepOrSelector;
+    }
+    else if (stepOrSelector != null) {
+        selector = stepOrSelector;
+    }
+
+    if (selector == null) {
+        selector = Functions.Identity;
+    }
+
+    selector = Utils.createLambda(selector);
+
+    if (size <= 0) {
+        throw new Error('windowed: size must be >= 1');
+    }
+
+    if (step == null || step <= 0) {
+        throw new Error('windowed: step must be >= 1');
+    }
+
+    return Enumerable.defer(function () {
+        var arr = source.toArray();
+        var result = [];
+
+        for (var start = 0, idx = 0; start + size <= arr.length; start += step, idx++) {
+            var window = arr.slice(start, start + size);
+            result.push(selector(window, idx));
+        }
+
+        return Enumerable.from(result);
+    });
+};
+
+// Overload:function(offset, defaultValue)
+Enumerable.prototype.lag = function (offset, defaultValue) {
+    var source = this;
+
+    if (offset == null) {
+        throw new Error('lag: offset must be >= 0');
+    }
+
+    offset = Math.floor(offset);
+
+    if (offset < 0) {
+        throw new Error('lag: offset must be >= 0');
+    }
+
+    return Enumerable.defer(function () {
+        var arr = source.toArray();
+        var result = new Array(arr.length);
+
+        for (var i = 0; i < arr.length; i++) {
+            var previousIndex = i - offset;
+            result[i] = previousIndex >= 0 ? arr[previousIndex] : defaultValue;
+        }
+
+        return Enumerable.from(result);
+    });
+};
+
+// Overload:function(offset, defaultValue)
+Enumerable.prototype.lead = function (offset, defaultValue) {
+    var source = this;
+
+    if (offset == null) {
+        throw new Error('lead: offset must be >= 0');
+    }
+
+    offset = Math.floor(offset);
+
+    if (offset < 0) {
+        throw new Error('lead: offset must be >= 0');
+    }
+
+    return Enumerable.defer(function () {
+        var arr = source.toArray();
+        var result = new Array(arr.length);
+
+        for (var i = 0; i < arr.length; i++) {
+            var nextIndex = i + offset;
+            result[i] = nextIndex < arr.length ? arr[nextIndex] : defaultValue;
+        }
+
+        return Enumerable.from(result);
+    });
+};
+
 // Overload:function(func)
 // Overload:function(seed,func<value,element>)
 Enumerable.prototype.scan = function (seed, func) {

@@ -16,6 +16,7 @@ import './paging.js'
 import './projection.js'
 import './set.js'
 import './whereSelectEnumerable.js'
+import './window.js'
 
 testutils.runAll(false);
 

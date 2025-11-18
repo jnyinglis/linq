@@ -62,6 +62,14 @@ declare namespace Enumerable {
     traverseDepthFirst<TResult>(childrenSelector: (element: T) => IEnumerable<T>, resultSelector?: (element: T, nestLevel: number) => TResult): IEnumerable<TResult>;
     flatten(): IEnumerable<unknown>;
     pairwise<TResult>(selector: (prev: T, current: T) => TResult): IEnumerable<TResult>;
+    windowed(size: number): IEnumerable<T[]>;
+    windowed(size: number, step: number): IEnumerable<T[]>;
+    windowed<TResult>(size: number, selector: (window: T[], index: number) => TResult): IEnumerable<TResult>;
+    windowed<TResult>(size: number, step: number, selector: (window: T[], index: number) => TResult): IEnumerable<TResult>;
+    lag(offset: number): IEnumerable<T | undefined>;
+    lag<TDefault>(offset: number, defaultValue: TDefault): IEnumerable<T | TDefault>;
+    lead(offset: number): IEnumerable<T | undefined>;
+    lead<TDefault>(offset: number, defaultValue: TDefault): IEnumerable<T | TDefault>;
     scan(func: (prev: T, current: T) => T): IEnumerable<T>;
     scan<TAccumulate>(seed: TAccumulate, func: (prev: TAccumulate, current: T) => TAccumulate): IEnumerable<TAccumulate>;
     select<TResult>(selector: (element: T, index: number) => TResult): IEnumerable<TResult>;

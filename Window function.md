@@ -1,32 +1,270 @@
-# Design Notes for Implementing `windowBy` in `linq.js`
+# Window Functions in `linq.js`: Design & Implementation Guide
 
-## 1. Purpose and Scope
+This document describes how to extend `linq.js` with **MoreLINQ-style primitives** and a higher-level **`windowBy`** operator tailored for analytic use cases (SQL window functions).
 
-`windowBy` is a higher-level operator that mimics SQL’s window functions:
+We’ll:
 
-```sql
-... OVER (PARTITION BY … ORDER BY … ROWS BETWEEN …)
+1. Add **core window primitives**:
+   - `windowed` (sliding windows)
+   - `lag`
+   - `lead`
+2. Implement **`windowBy`** on top of standard LINQ operators (and optionally using those primitives).
+3. Outline behaviour, trade-offs, and test scenarios.
 
-It works over grouped, ordered partitions and exposes each row together with its window (the slice of rows around it).
+All code samples assume the usual import:
 
-We’ll add it as an instance method on Enumerable, so it composes with existing LINQ chains.
+```js
+import Enumerable from './linq.js'
+````
 
-2. Target API
+---
 
-2.1 Type Signatures (conceptual)
+## 1. Goals & Overview
 
-type WindowFrame = {
-  preceding: number;          // rows before the current row
-  following: number;          // rows after the current row
-  requireFullWindow?: boolean // if true, emit empty window (or null) until frame is fully available
-};
+We want a small, coherent set of sequence operators that:
 
-interface WindowContext<T> {
-  partitionKey: any;
-  row: T;
-  index: number;  // index within the partition
-  partition: T[]; // full ordered partition
-  window: T[];    // the window around the current row
+* Make **sliding windows** and **neighbor access** easy (`windowed`, `lag`, `lead`).
+* Provide a high-level, SQL-like operator for analytics:
+
+  ```sql
+  ... OVER (PARTITION BY … ORDER BY … ROWS BETWEEN …)
+  ```
+
+  Implemented as:
+
+  ```ts
+  windowBy(
+    partitionKeySelector,
+    orderKeySelector,
+    frame,
+    selector
+  )
+  ```
+
+This lets your semantic engine write:
+
+```js
+Enumerable.from(rows)
+  .windowBy(
+    r => r.regionId,
+    r => r.month,
+    { preceding: 2, following: 0, requireFullWindow: true },
+    ({ row, window }) => ({
+      ...row,
+      salesRolling3: Enumerable.from(window).sum(w => w.totalSalesAmount),
+    })
+  )
+```
+
+instead of hand-rolling `groupBy + orderBy + index arithmetic` every time.
+
+---
+
+## 2. Core Primitive: `windowed`
+
+### 2.1 Concept
+
+`windowed` produces **sliding windows** over a sequence, similar to Kotlin’s `windowed` or MoreLINQ’s `Window`.
+
+**Examples:**
+
+```js
+// Basic sliding window of size 3
+Enumerable.range(1, 5).windowed(3).toArray()
+// => [[1,2,3], [2,3,4], [3,4,5]]
+
+// With selector
+Enumerable.range(1, 5)
+  .windowed(3, 1, (win, i) => ({ index: i, sum: Enumerable.from(win).sum() }))
+  .toArray()
+// => [
+//   { index: 0, sum: 6 },
+//   { index: 1, sum: 9 },
+//   { index: 2, sum: 12 }
+// ]
+```
+
+### 2.2 API
+
+Conceptual TypeScript:
+
+```ts
+interface Enumerable<T> {
+  windowed(size: number): Enumerable<T[]>
+  windowed<R>(
+    size: number,
+    step: number,
+    selector: (window: T[], index: number) => R
+  ): Enumerable<R>
+}
+```
+
+* `size`: window size (must be ≥ 1).
+* `step`: number of elements to advance per window (default: 1).
+* `selector`: transforms each window; if omitted, windows are emitted as arrays.
+
+### 2.3 Behaviour
+
+* Windows are contiguous slices: `[start, start+size)`.
+* Last window is emitted only when there is a **full** window.
+* If `step` is omitted or `null`, treat it as `1`.
+
+### 2.4 Implementation Sketch
+
+Use `Enumerable.defer` to keep it lazy; internally materialize to an array for v1.
+
+```js
+Enumerable.prototype.windowed = function(size, stepOrSelector, maybeSelector) {
+  const source = this
+  const hasStep = typeof stepOrSelector === 'number'
+  const step = hasStep ? stepOrSelector : 1
+  const selector =
+    typeof stepOrSelector === 'function'
+      ? stepOrSelector
+      : (maybeSelector || ((w) => w))
+
+  if (size <= 0) {
+    throw new Error('windowed: size must be >= 1')
+  }
+  if (step <= 0) {
+    throw new Error('windowed: step must be >= 1')
+  }
+
+  return Enumerable.defer(() => {
+    const arr = source.toArray()
+    const result = []
+
+    for (let start = 0, idx = 0; start + size <= arr.length; start += step, idx++) {
+      const win = arr.slice(start, start + size)
+      result.push(selector(win, idx))
+    }
+
+    return Enumerable.from(result)
+  })
+}
+```
+
+---
+
+## 3. Convenience Primitive: `lag` / `lead`
+
+### 3.1 Concept
+
+`lag` and `lead` expose **previous** or **next** elements relative to each position.
+
+```js
+// lag: previous value
+Enumerable.from([10, 20, 30])
+  .lag(1, null)
+  .toArray()
+// => [null, 10, 20]
+
+// lead: next value
+Enumerable.from([10, 20, 30])
+  .lead(1, null)
+  .toArray()
+// => [20, 30, null]
+```
+
+Can be combined with `zip` to compute deltas:
+
+```js
+const sales = Enumerable.from([100, 120, 90])
+const curr = sales
+const prev = sales.lag(1, null)
+
+curr
+  .zip(prev, (c, p) => (p == null ? null : c - p))
+  .toArray()
+// => [null, 20, -30]
+```
+
+### 3.2 API
+
+```ts
+interface Enumerable<T> {
+  lag(offset: number, defaultValue?: T): Enumerable<T | undefined>
+  lead(offset: number, defaultValue?: T): Enumerable<T | undefined>
+}
+```
+
+### 3.3 Implementation Sketch
+
+Again, array-based first:
+
+```js
+Enumerable.prototype.lag = function(offset, defaultValue = undefined) {
+  const source = this
+  if (offset < 0) {
+    throw new Error('lag: offset must be >= 0')
+  }
+
+  return Enumerable.defer(() => {
+    const arr   = source.toArray()
+    const result = []
+
+    for (let i = 0; i < arr.length; i++) {
+      const j = i - offset
+      result.push(j >= 0 ? arr[j] : defaultValue)
+    }
+
+    return Enumerable.from(result)
+  })
+}
+
+Enumerable.prototype.lead = function(offset, defaultValue = undefined) {
+  const source = this
+  if (offset < 0) {
+    throw new Error('lead: offset must be >= 0')
+  }
+
+  return Enumerable.defer(() => {
+    const arr    = source.toArray()
+    const result = []
+
+    for (let i = 0; i < arr.length; i++) {
+      const j = i + offset
+      result.push(j < arr.length ? arr[j] : defaultValue)
+    }
+
+    return Enumerable.from(result)
+  })
+}
+```
+
+---
+
+## 4. High-Level Operator: `windowBy`
+
+### 4.1 Concept
+
+`windowBy` is the SQL-like analytic operator:
+
+* `PARTITION BY` → `partitionKeySelector`
+* `ORDER BY` → `orderKeySelector`
+* `ROWS BETWEEN ...` → `frame` (`preceding` / `following`)
+
+It returns a new sequence where each element is produced by a `selector` that sees:
+
+* the current row
+* the entire ordered partition
+* the window slice around that row
+
+### 4.2 Types
+
+```ts
+export type WindowFrame = {
+  preceding: number       // rows before the current row
+  following: number       // rows after the current row
+  requireFullWindow?: boolean // default true
+}
+
+export interface WindowContext<T> {
+  partitionKey: any
+  row: T
+  index: number          // index within ordered partition
+  partition: T[]         // full ordered partition
+  window: T[]            // framed window for this row (may be [])
 }
 
 interface Enumerable<T> {
@@ -35,144 +273,102 @@ interface Enumerable<T> {
     orderKeySelector: (item: T) => any,
     frame: WindowFrame,
     selector: (ctx: WindowContext<T>) => R
-  ): Enumerable<R>;
+  ): Enumerable<R>
 }
+```
 
-2.2 Example Usage
+### 4.3 Behaviour
 
-Rolling 3-row sum per region, ordered by month
+Given a partition with `n` elements and a row at index `i`:
 
-Enumerable.from(rows)
-  .windowBy(
-    r => r.regionId,           // partition by region
-    r => r.month,              // order by month
-    { preceding: 2, following: 0, requireFullWindow: true },
-    ({ row, window }) => ({
-      ...row,
-      salesRolling3: Enumerable.from(window).sum(w => w.totalSalesAmount),
-    })
-  )
-  .toArray();
+```txt
+start = max(0, i - preceding)
+end   = min(n - 1, i + following)
+window = partition.slice(start, end + 1)
+```
 
-Rank products by sales within region
+* If `requireFullWindow` is `true` (default):
 
+  * `fullWindowSize = preceding + following + 1`
+  * If `window.length < fullWindowSize`, the operator still calls `selector`, but passes `window: []`.
+* If `requireFullWindow` is `false`:
+
+  * Partial windows are allowed; `window` will contain as many rows as are available.
+
+The **output sequence length equals the input length**: one output per input row.
+
+### 4.4 Example Usage
+
+#### Rolling 3-period sum per region, ordered by month
+
+```js
 Enumerable.from(rows)
   .windowBy(
     r => r.regionId,
-    r => -r.totalSalesAmount,  // descending order via negative
+    r => r.month,
+    { preceding: 2, following: 0, requireFullWindow: true },
+    ({ row, window }) => ({
+      ...row,
+      salesRolling3: window.length
+        ? Enumerable.from(window).sum(w => w.totalSalesAmount)
+        : null,
+    })
+  )
+  .toArray()
+```
+
+#### Rank products by sales within region
+
+```js
+Enumerable.from(rows)
+  .windowBy(
+    r => r.regionId,
+    r => -r.totalSalesAmount, // descending by sales
     { preceding: Number.MAX_SAFE_INTEGER, following: 0, requireFullWindow: false },
     ({ row, index }) => ({
       ...row,
       salesRankInRegion: index + 1,
     })
   )
-  .toArray();
+  .toArray()
+```
 
+### 4.5 Implementation Plan
 
-⸻
+Initial implementation can be array-based using existing operators:
 
-3. Behaviour and Semantics
+1. `groupBy` by partition key.
+2. For each group:
 
-3.1 Partitioning
-	•	All elements are partitioned using partitionKeySelector(item).
-	•	Each partition is processed independently.
-	•	Partitions are not required to be contiguous in the original sequence; groupBy semantics apply.
+   * `orderBy` by order key.
+   * Convert to `partition` array.
+3. For each index in partition:
 
-3.2 Ordering
-	•	Within each partition, rows are sorted by orderKeySelector(item).
-	•	Standard orderBy is sufficient; secondary ordering (ties) is up to the caller (e.g. combine fields in orderKeySelector if needed).
+   * Compute `start`, `end`, `window`.
+   * Apply `requireFullWindow` logic.
+   * Call `selector` with `WindowContext`.
+4. Accumulate results across all partitions into an array.
+5. Return `Enumerable.defer(() => Enumerable.from(out))`.
 
-3.3 Window Frame
+### 4.6 Implementation Sketch
 
-Given a partition of size n and a row at index i:
-	•	start = max(0, i - preceding)
-	•	end   = min(n - 1, i + following)
-	•	window = partition.slice(start, end + 1)
-
-If requireFullWindow is true:
-	•	A full window size is preceding + following + 1.
-	•	If window.length < fullWindowSize, we still call selector but pass window as [] (or another convention; see below).
-
-If requireFullWindow is false:
-	•	Partial windows are allowed (e.g. at the beginning and end of the partition).
-
-3.4 Selector and Output
-
-For each row in each partition, the selector is called with:
-
-{
-  partitionKey: group.key(),
-  row: partition[i],     // the current row
-  index: i,              // index within ordered partition
-  partition,             // full ordered array of the partition
-  window                 // the framed slice for this row
-}
-
-	•	The selector return value is the output element of the resulting sequence.
-	•	The resulting sequence preserves:
-	•	Partition grouping, but not necessarily original global order.
-	•	Within a partition, the order is by orderKeySelector.
-
-If preserving original global order is required later, we can consider an optional stableKeySelector, but that’s out of scope for v1.
-
-⸻
-
-4. Implementation Plan
-
-4.1 Location and Attachment
-	•	Implement windowBy on Enumerable.prototype, alongside other higher-level operators (e.g. near groupBy, partitionBy).
-	•	Use Enumerable.defer and Enumerable.from so that:
-	•	Evaluation is lazy.
-	•	Each iteration constructs a fresh enumerable.
-
-4.2 High-Level Implementation (array-based first)
-
-We can lean on existing operators:
-	1.	Partition the source:
-
-const groups = Enumerable.from(source)
-  .groupBy(
-    partitionKeySelector,
-    x => x
-  )
-  .toArray();
-
-
-	2.	Process each partition:
-	•	Turn the group into an ordered array:
-
-const partition = group
-  .orderBy(orderKeySelector)
-  .toArray();
-
-
-	•	For each i in [0, partition.length):
-	•	Compute start, end, window.
-	•	Apply requireFullWindow logic.
-	•	Call selector({ partitionKey, row, index, partition, window }).
-	•	Push result into an accumulated array.
-
-	3.	Return combined results as an Enumerable:
-
-return Enumerable.defer(() => {
-  const groups = ...;
-  const out = [];
-  // loop groups → partitions → rows, call selector, push to out
-  return Enumerable.from(out);
-});
-
-
-
-Pseudocode
-
+```js
 Enumerable.prototype.windowBy = function(
   partitionKeySelector,
   orderKeySelector,
   frame,
   selector
 ) {
-  const source = this;
-  const { preceding, following, requireFullWindow = true } = frame;
+  const source = this
+  const {
+    preceding,
+    following,
+    requireFullWindow = true,
+  } = frame
+
+  if (preceding < 0 || following < 0) {
+    throw new Error('windowBy: preceding/following must be >= 0')
+  }
 
   return Enumerable.defer(() => {
     const groups = Enumerable.from(source)
@@ -180,28 +376,28 @@ Enumerable.prototype.windowBy = function(
         partitionKeySelector,
         x => x
       )
-      .toArray();
+      .toArray()
 
-    const out = [];
+    const out = []
+    const fullWindowSize = preceding + following + 1
 
     for (const group of groups) {
-      const key = group.key();
+      const key = group.key()
       const partition = group
         .orderBy(orderKeySelector)
-        .toArray();
+        .toArray()
 
-      const n = partition.length;
-      const fullWindowSize = preceding + following + 1;
+      const n = partition.length
 
       for (let i = 0; i < n; i++) {
-        const start = Math.max(0, i - preceding);
-        const end = Math.min(n - 1, i + following);
-        const window = partition.slice(start, end + 1);
+        const start = Math.max(0, i - preceding)
+        const end   = Math.min(n - 1, i + following)
+        const rawWindow = partition.slice(start, end + 1)
 
-        const effectiveWindow =
-          requireFullWindow && window.length < fullWindowSize
+        const window =
+          requireFullWindow && rawWindow.length < fullWindowSize
             ? []
-            : window;
+            : rawWindow
 
         out.push(
           selector({
@@ -209,123 +405,112 @@ Enumerable.prototype.windowBy = function(
             row: partition[i],
             index: i,
             partition,
-            window: effectiveWindow,
+            window,
           })
-        );
+        )
       }
     }
 
-    return Enumerable.from(out);
-  });
-};
+    return Enumerable.from(out)
+  })
+}
+```
 
-4.3 Integration with Existing Utilities
-	•	If you have Enumerable.Utils.createEnumerable / createEnumerator, you can later convert the array-based logic into a streaming enumerator.
-	•	For a first version, the toArray() usage is fine and keeps the logic easy to read.
+Later, if needed, you can replace the array-based processing with a streaming enumerator using `Enumerable.Utils.createEnumerable` / `createEnumerator`.
 
-⸻
+---
 
-5. Design Choices and Trade-offs
+## 5. Relationship to MoreLINQ
 
-5.1 Array-based vs streaming enumerators
+This design is intentionally similar to MoreLINQ but adapted to your JS library:
 
-Array-based (initial plan):
-	•	Pros:
-	•	Straightforward, easy to reason about.
-	•	Reuses existing groupBy, orderBy, toArray.
-	•	Good enough for moderate partition sizes (analytics scenarios are often aggregated anyway).
-	•	Cons:
-	•	Requires materializing each partition in memory.
-	•	Not ideal for extremely large partitions.
+* **`windowed`** ≈ MoreLINQ’s `Window` (sliding windows).
+* **`lag` / `lead`** ≈ MoreLINQ’s `Lag` / `Lead`.
+* **`windowBy`** is a higher-level composition that:
 
-Enumerator-based (later enhancement):
-	•	You could build windowBy on top of createEnumerable + createEnumerator to avoid full materialization, at the cost of more complex code.
-	•	This can be deferred until you see a real need.
+  * partitions (`groupBy`)
+  * orders (`orderBy`)
+  * frames windows (using indices)
+  * exposes a rich `WindowContext` to the caller
 
-5.2 requireFullWindow semantics
+You can treat `windowBy` as your “SQL window function” operator built on top of a **MoreLINQ-like core**.
 
-We need to pick behaviour when there aren’t enough rows on one or both sides:
-	•	Current suggestion: if requireFullWindow is true and there aren’t enough rows:
-	•	Call selector with window: [] and let the selector decide how to handle it (usually return null or some default).
-	•	Alternative: skip those rows entirely. This would change output length and complicate alignment, so less desirable for a general operator.
+---
 
-5.3 Ordering stability
-	•	Within a partition, ordering is defined by orderKeySelector.
-	•	Between partitions, the current plan just concatenates partitions in whatever order groupBy().toArray() yields them.
-	•	If a stable global order is required by callers, we can consider:
-	•	Adding an optional postOrderKeySelector and applying a final orderBy after windowBy, or
-	•	Documenting that callers should re-sort if needed.
+## 6. Testing Plan
 
-⸻
+### 6.1 `windowed`
 
-6. Testing Plan
+* Basic sliding behaviour:
 
-6.1 Basic behaviour
-	•	Single partition, simple data:
+  ```js
+  Enumerable.range(1, 5).windowed(3).toArray()
+  // => [[1,2,3], [2,3,4], [3,4,5]]
+  ```
 
-const rows = [
-  { id: 1, v: 10 },
-  { id: 2, v: 20 },
-  { id: 3, v: 30 },
-];
+* With custom `step`:
 
-const result = Enumerable.from(rows)
-  .windowBy(
-    r => 'all',
-    r => r.id,
-    { preceding: 1, following: 0, requireFullWindow: false },
-    ({ row, window }) => ({
-      id: row.id,
-      sumWindow: Enumerable.from(window).sum(x => x.v),
-    })
-  )
-  .toArray();
+  ```js
+  Enumerable.range(1, 7).windowed(3, 3).toArray()
+  // => [[1,2,3], [4,5,6]]
+  ```
 
-Expected window sums: [10, 30, 50] (rows: [10], [10,20], [20,30]).
+* Edge cases:
 
-6.2 Multiple partitions
-	•	Use regionId partitions, verify that each region’s windows don’t mix rows from other regions.
-	•	Check that the number of output rows equals the number of input rows.
+  * `size > length` → empty.
+  * `size == 1` → each element in its own window.
+  * Invalid `size` or `step` → throws.
 
-6.3 requireFullWindow flag
-	•	With preceding = 2, following = 0, partition length 3:
-	•	requireFullWindow = true → first two rows get window: [], last row gets full [r1, r2, r3].
-	•	requireFullWindow = false → all rows get partial windows.
+### 6.2 `lag` / `lead`
 
-6.4 Edge cases
-	•	Empty sequence → result is empty.
-	•	Single-element partitions with various frames.
-	•	Non-numeric windows (e.g. strings) to ensure the operator is type-agnostic.
+* Basic offsets, including `offset = 0` (should echo input).
+* Default value when index falls out of range.
+* Composition with `zip` for deltas.
 
-⸻
+### 6.3 `windowBy`
 
-7. Documentation and Examples
+* **Single partition**:
 
-Once implemented:
-	1.	Add windowBy to your operator tutorial with:
-	•	Short conceptual mapping to SQL OVER (PARTITION BY … ORDER BY … ROWS BETWEEN …).
-	•	At least two examples:
-	•	Rolling 3-period sum.
-	•	Rank within partition.
-	2.	Clarify:
-	•	That it is partition-based (uses groupBy internally).
-	•	That it expects the selector to map WindowContext<T> to whatever shape the caller wants.
-	•	The meaning of preceding, following, and requireFullWindow.
+  * No partitioning differences.
+  * Validate window contents for various `preceding` / `following` values.
+* **Multiple partitions**:
 
-⸻
+  * Windows never cross partition boundaries.
+  * Output count matches input count.
+* `requireFullWindow`:
 
-8. Summary
+  * With `preceding = 2, following = 0`, partition length 3:
 
-To implement windowBy:
-	•	API: add windowBy(partitionKeySelector, orderKeySelector, frame, selector) on Enumerable.prototype.
-	•	Core behaviour:
-	•	Partition via groupBy.
-	•	Order within partition via orderBy.
-	•	For each row, compute a frame-based window (preceding/following).
-	•	Call selector with full WindowContext.
-	•	Implementation:
-	•	Start with an array-based defer implementation using existing operators.
-	•	Optionally refine to an enumerator-based version later.
-	•	Usage:
-	•	Use windowBy as the foundation for rolling sums, moving averages, ranks, and other window-style analytics in your semantic engine.
+    * `requireFullWindow = true` → first two rows get `window: []`.
+    * `requireFullWindow = false` → windows of sizes 1, 2, 3.
+* Empty input:
 
+  * Returns empty sequence without error.
+
+---
+
+## 7. Summary
+
+To implement window functions in `linq.js`:
+
+1. **Add sequence-level primitives**:
+
+   * `windowed(size, step?, selector?)`
+   * `lag(offset, defaultValue?)`
+   * `lead(offset, defaultValue?)`
+
+2. **Add a SQL-style operator**:
+
+   * `windowBy(partitionKeySelector, orderKeySelector, frame, selector)`
+
+3. **Use `windowBy` inside your semantic metrics engine** for:
+
+   * rolling sums / averages,
+   * period-over-period changes,
+   * ranks and percent-of-total within partitions.
+
+These additions keep the library general-purpose (MoreLINQ-style) while giving you a powerful analytic abstraction that aligns with how you’re modelling metrics and context in your engine.
+
+```
+::contentReference[oaicite:0]{index=0}
+```
