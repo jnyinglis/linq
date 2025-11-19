@@ -1,4 +1,4 @@
-import { test, testModule, deepEqual } from './testutils.js'
+import { test, testModule, deepEqual, ok } from './testutils.js'
 import Enumerable from '../linq.js'
 
 testModule('Window functions');
@@ -61,11 +61,34 @@ test('windowBy partitions, orders, and frames rows', function () {
         { region: 'west', month: 3, windowAmounts: [25, 35] }
     ]);
 
+    const allowPartial = Enumerable.from(sales)
+        .windowBy(
+            function (row) { return row.region },
+            function (row) { return row.month },
+            { preceding: 1, following: 0, requireFullWindow: false },
+            function (ctx) {
+                return {
+                    region: ctx.partitionKey,
+                    month: ctx.row.month,
+                    windowAmounts: ctx.window.map(function (entry) { return entry.amount; })
+                };
+            }
+        )
+        .toArray();
+
+    deepEqual(allowPartial, [
+        { region: 'east', month: 1, windowAmounts: [10] },
+        { region: 'east', month: 2, windowAmounts: [10, 20] },
+        { region: 'west', month: 1, windowAmounts: [15] },
+        { region: 'west', month: 2, windowAmounts: [15, 25] },
+        { region: 'west', month: 3, windowAmounts: [25, 35] }
+    ]);
+
     const rollingSum = Enumerable.from(sales)
         .windowBy(
             function (row) { return row.region },
             function (row) { return row.month },
-            { preceding: 1, following: 1, requireFullWindow: false },
+            { preceding: 1, following: 0, requireFullWindow: false },
             function (ctx) {
                 return {
                     region: ctx.partitionKey,
@@ -77,10 +100,39 @@ test('windowBy partitions, orders, and frames rows', function () {
         .toArray();
 
     deepEqual(rollingSum, [
-        { region: 'east', month: 1, rolling: 30 },
+        { region: 'east', month: 1, rolling: 10 },
         { region: 'east', month: 2, rolling: 30 },
-        { region: 'west', month: 1, rolling: 40 },
-        { region: 'west', month: 2, rolling: 75 },
+        { region: 'west', month: 1, rolling: 15 },
+        { region: 'west', month: 2, rolling: 40 },
         { region: 'west', month: 3, rolling: 60 }
     ]);
+});
+
+test('windowBy validates the frame parameter', function () {
+    const rows = [
+        { region: 'north', month: 1, amount: 10 },
+        { region: 'north', month: 2, amount: 20 }
+    ];
+
+    function expectThrows(frame) {
+        let threw = false;
+        try {
+            Enumerable.from(rows)
+                .windowBy(
+                    function (row) { return row.region; },
+                    function (row) { return row.month; },
+                    frame,
+                    function (ctx) { return ctx.row; }
+                )
+                .toArray();
+        }
+        catch (e) {
+            threw = true;
+        }
+        ok(threw);
+    }
+
+    expectThrows({ preceding: -1, following: 0 });
+    expectThrows({ preceding: 0, following: 1.5 });
+    expectThrows('invalid');
 });

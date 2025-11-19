@@ -1889,11 +1889,30 @@ Enumerable.prototype.windowBy = function (partitionKeySelector, orderKeySelector
     partitionKeySelector = Utils.createLambda(partitionKeySelector);
     orderKeySelector = Utils.createLambda(orderKeySelector);
     selector = (selector == null) ? Functions.Identity : Utils.createLambda(selector);
+
+    if (frame != null && typeof frame !== Types.Object) {
+        throw new Error('windowBy: frame must be an object');
+    }
+
     frame = frame || {};
 
-    var preceding = (frame.preceding == null) ? 0 : frame.preceding;
-    var following = (frame.following == null) ? 0 : frame.following;
-    var requireFullWindow = (frame.requireFullWindow == null) ? true : frame.requireFullWindow;
+    function normalizeBoundary(value, propertyName) {
+        if (value == null) {
+            return 0;
+        }
+
+        var numeric = Number(value);
+
+        if (!isFinite(numeric) || numeric < 0 || Math.floor(numeric) !== numeric) {
+            throw new Error('windowBy: frame.' + propertyName + ' must be a non-negative integer');
+        }
+
+        return numeric;
+    }
+
+    var preceding = normalizeBoundary(frame.preceding, 'preceding');
+    var following = normalizeBoundary(frame.following, 'following');
+    var requireFullWindow = (frame.requireFullWindow == null) ? true : !!frame.requireFullWindow;
 
     return Enumerable.defer(function () {
         var groups = source
